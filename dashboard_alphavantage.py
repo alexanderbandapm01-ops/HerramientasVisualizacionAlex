@@ -15,9 +15,9 @@
 #     alphavantage_key = "pega-aqui-tu-llave"
 # Al publicar en Streamlit Community Cloud: pega esa misma línea en la
 # sección de secretos de la app. El archivo secrets.toml nunca se sube
-# al repositorio. Sin llave, el tablero corre con los datos de ejemplo
-# de aapl_semanal_ejemplo.csv (precios semanales reales de AAPL
-# 2021-2025) y lo dice con un aviso.
+# al repositorio. Sin llave, el tablero corre con aapl_semanal_ejemplo.csv,
+# que son datos reales de Alpha Vantage descargados el 24 nov 2026
+# (la respuesta completa está en respuesta.json) y lo dice con un aviso.
 #
 # Límites del plan gratuito de Alpha Vantage: 25 peticiones por día,
 # máximo 5 por minuto. Por eso la respuesta se guarda en respuesta.json
@@ -36,7 +36,6 @@ import streamlit as st
 # ─── Paleta del curso ──────────────────────────────────────────────────
 GRIS = "#B9C3D1"
 AZUL = "#1C4C9A"
-ROJO = "#B2182B"
 CUALI = ["#E69F00", "#56B4E9", "#009E73", "#0072B2"]
 sns.set_theme(style="whitegrid")
 
@@ -127,6 +126,7 @@ def cargar_muestra():
 def preparar(df):
     df = df.sort_values("fecha").reset_index(drop=True)
     df["rango_semanal"] = df["maximo"] - df["minimo"]
+    df["variacion_semanal_pct"] = df["cierre"].pct_change() * 100
     df["anio"] = df["fecha"].dt.year
     return df
 
@@ -144,26 +144,27 @@ if LLAVE:
         datos = preparar(consultar(llave=LLAVE))
         origen = "Alpha Vantage en vivo (TIME_SERIES_WEEKLY, AAPL)"
     except Exception as e:
-        st.warning(f"No se pudo consultar Alpha Vantage ({e}). Se muestran datos de ejemplo.")
+        st.warning(f"No se pudo consultar Alpha Vantage ({e}). Se muestran datos descargados.")
         datos = preparar(cargar_muestra())
         usando_muestra = True
-        origen = "Datos de ejemplo (aapl_semanal_ejemplo.csv)"
+        origen = "Alpha Vantage, datos descargados el 24 nov 2026 (aapl_semanal_ejemplo.csv)"
 else:
     st.warning(
-        "Sin llave de Alpha Vantage: se muestran datos de ejemplo. "
+        "Sin llave de Alpha Vantage: se muestran datos descargados el 24 nov 2026. "
         "Consigue tu llave gratis en https://www.alphavantage.co/support/#api-key "
         "y ponla en `.streamlit/secrets.toml` como `alphavantage_key`."
     )
     datos = preparar(cargar_muestra())
     usando_muestra = True
-    origen = "Datos de ejemplo (aapl_semanal_ejemplo.csv)"
+    origen = "Alpha Vantage, datos descargados el 24 nov 2026 (aapl_semanal_ejemplo.csv)"
 
-# ─── Filtros ───────────────────────────────────────────────────────────
+# ─── Filtros y ficha de la API ─────────────────────────────────────────
 st.title("Apple (AAPL): precios semanales · Alpha Vantage")
 st.caption(f"Fuente: {origen} · EP.03.01 · IDIA223 Herramientas de Visualización")
 if usando_muestra:
-    st.info("Estás viendo datos de ejemplo etiquetados, no la consulta en vivo.")
+    st.info("Estás viendo datos de Alpha Vantage descargados, no la consulta en vivo.")
 
+st.sidebar.header("Filtros")
 anios = sorted(datos["anio"].unique().tolist())
 sel_anios = st.sidebar.multiselect("Años", anios, default=anios)
 if not sel_anios:
@@ -171,20 +172,39 @@ if not sel_anios:
     st.stop()
 df = datos[datos["anio"].isin(sel_anios)].copy()
 
+st.sidebar.header("La API")
+st.sidebar.markdown(
+    "- **API:** Alpha Vantage\n"
+    "- **Función:** TIME_SERIES_WEEKLY\n"
+    "- **Símbolo:** AAPL (Apple)\n"
+    "- **Registros:** "
+    f"{len(df)} semanas seleccionadas de {len(datos)} en total\n"
+    "- **Rango:** "
+    f"{df['fecha'].min().date()} a {df['fecha'].max().date()}\n"
+    "- **Límite gratis:** 25 peticiones/día, 5/min"
+)
+
 ultimo = df.iloc[-1]
 anterior = df.iloc[-2] if len(df) > 1 else None
 variacion = (
     (ultimo["cierre"] / anterior["cierre"] - 1) * 100 if anterior is not None else 0.0
 )
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("Último cierre (USD)", f"${ultimo['cierre']:.2f}")
 col2.metric("Variación última semana", f"{variacion:+.2f}%")
 col3.metric("Volumen semanal promedio", f"{df['volumen'].mean():,.0f} acciones")
+col4.metric("Rango semanal mediano (USD)", f"${df['rango_semanal'].median():.2f}")
 
+primer_cierre = df.iloc[0]["cierre"]
+ultimo_cierre = df.iloc[-1]["cierre"]
+cambio_total = (ultimo_cierre / primer_cierre - 1) * 100
 
 # ─── Gráfica 1 · Evolución ─────────────────────────────────────────────
-st.subheader("El cierre semanal de Apple subió de forma sostenida entre 2021 y 2025")
+st.subheader(
+    f"El cierre semanal de Apple subió {cambio_total:+.0f}% entre "
+    f"{df['fecha'].min().year} y {df['fecha'].max().year}"
+)
 fig1, ax1 = plt.subplots(figsize=(10, 4))
 ax1.plot(df["fecha"], df["cierre"], color=AZUL, linewidth=1.5)
 ax1.set_xlabel("Fecha")
@@ -192,27 +212,31 @@ ax1.set_ylabel("Cierre (USD)")
 ax1.grid(True, color=GRIS, alpha=0.5)
 st.pyplot(fig1)
 st.caption(
-    "Pregunta: ¿cómo cambió el precio de cierre semanal de Apple y su tendencia "
-    "entre 2021 y 2025? Lectura: el cierre pasó de unos $130 a principios de 2021 "
-    "a más de $270 a finales de 2025, con caídas marcadas en 2022."
+    "Pregunta: ¿cómo cambió el precio de cierre semanal de Apple y su tendencia? "
+    f"Lectura: el cierre pasó de ${primer_cierre:.2f} a ${ultimo_cierre:.2f}, "
+    "con caídas marcadas en 2022."
 )
 
 # ─── Gráfica 2 · Distribución ──────────────────────────────────────────
-st.subheader("La mayoría de las semanas Apple se movió menos de $10")
+mediana_rango = df["rango_semanal"].median()
+st.subheader(f"La mayoría de las semanas Apple se movió menos de ${mediana_rango:.0f}")
 fig2, ax2 = plt.subplots(figsize=(10, 4))
 ax2.hist(df["rango_semanal"], bins=25, color=AZUL, edgecolor="white")
+ax2.axvline(mediana_rango, color=CUALI[0], linestyle="--", label=f"Mediana: ${mediana_rango:.2f}")
+ax2.legend()
 ax2.set_xlabel("Rango semanal, máximo − mínimo (USD)")
 ax2.set_ylabel("Semanas")
 ax2.grid(True, color=GRIS, alpha=0.5)
 st.pyplot(fig2)
 st.caption(
     "Pregunta: ¿cómo se reparten las variaciones semanales de precio? "
-    "Lectura: el rango semanal típico se concentra entre $4 y $10; "
+    "Lectura: el rango semanal típico se concentra cerca de la mediana; "
     "las semanas con rangos de más de $15 son pocas y coinciden con "
     "movimientos fuertes del mercado."
 )
 
 # ─── Gráfica 3 · Relación ──────────────────────────────────────────────
+corr = df["rango_semanal"].corr(df["volumen"])
 st.subheader("Las semanas de mayor movimiento también son las de mayor volumen")
 fig3, ax3 = plt.subplots(figsize=(10, 4))
 ax3.scatter(df["volumen"], df["rango_semanal"], color=CUALI[1], s=18, alpha=0.7)
@@ -222,13 +246,19 @@ ax3.grid(True, color=GRIS, alpha=0.5)
 st.pyplot(fig3)
 st.caption(
     "Pregunta: ¿hay relación entre la amplitud de la variación semanal en "
-    "dólares y el volumen operado? Lectura: a mayor volumen, el rango "
-    "semanal tiende a ser mayor; las semanas tranquilas operan poco volumen."
+    "dólares y el volumen operado? "
+    f"Lectura: la correlación es {corr:.2f}, una relación positiva débil: "
+    "a mayor volumen, el rango semanal tiende a ser mayor; las semanas "
+    "tranquilas operan poco volumen."
 )
 
 # ─── Gráfica 4 · Comparación ───────────────────────────────────────────
-st.subheader("El volumen semanal promedio fue mayor en 2021 y 2022 que en 2023-2025")
 comp = df[df["anio"].between(2022, 2025)].groupby("anio")["volumen"].mean()
+anio_max = comp.idxmax()
+anio_min = comp.idxmin()
+st.subheader(
+    f"El volumen semanal promedio fue mayor en {anio_max} y menor en {anio_min}"
+)
 fig4, ax4 = plt.subplots(figsize=(10, 4))
 ax4.bar(comp.index.astype(str), comp.values, color=CUALI)
 ax4.set_xlabel("Año")
@@ -237,8 +267,19 @@ ax4.grid(True, color=GRIS, alpha=0.5, axis="y")
 st.pyplot(fig4)
 st.caption(
     "Pregunta: ¿en qué año entre 2022 y 2025 se registró el mayor y menor "
-    "volumen semanal promedio? Lectura: el mayor fue 2022 y el menor 2025."
+    f"volumen semanal promedio? Lectura: el mayor fue {anio_max} "
+    f"({comp.max():,.0f} acciones) y el menor {anio_min} ({comp.min():,.0f})."
 )
+
+# ─── Tabla de datos ────────────────────────────────────────────────────
+with st.expander("Ver la tabla de datos"):
+    st.dataframe(df, width="stretch")
+    st.download_button(
+        "Descargar los datos filtrados (CSV)",
+        df.to_csv(index=False).encode("utf-8"),
+        file_name="aapl_semanal_filtrado.csv",
+        mime="text/csv",
+    )
 
 st.caption(
     "Tablero EP.03.01 · API: Alpha Vantage, TIME_SERIES_WEEKLY, AAPL · "
